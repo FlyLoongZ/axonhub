@@ -25,6 +25,9 @@ import (
 
 var defaultBatchSize = 500
 
+// batchInterval is the sleep duration between batch deletions to reduce CPU pressure.
+var batchInterval = 100 * time.Millisecond
+
 type Config struct {
 	CRON          string `json:"cron" yaml:"cron" conf:"cron" validate:"required"`
 	VacuumEnabled bool   `json:"vacuum_enabled" yaml:"vacuum_enabled" conf:"vacuum_enabled"`
@@ -67,25 +70,67 @@ func (w *Worker) RegisterScheduledTasks(ctx context.Context, s *scheduler.Schedu
 	}, w.runCleanupWithSystemContext)
 }
 
-// deleteInBatches deletes records in batches to avoid memory issues.
-func (w *Worker) deleteInBatches(ctx context.Context, deleteFunc func() (int, error)) (int, error) {
+// deleteBatched deletes rows in batches using a subquery to avoid unconstrained DELETE.
+// It generates: DELETE FROM table WHERE id IN (SELECT id FROM table WHERE <cond> ORDER BY id LIMIT N)
+func (w *Worker) deleteBatched(ctx context.Context, table string, whereClause string, whereArgs ...any) (int, error) {
+	sqlDriver, err := w.getSQLDriver()
+	if err != nil {
+		return 0, err
+	}
+
+	batchSize := w.getBatchSize()
 	totalDeleted := 0
 
 	for {
-		deleted, err := deleteFunc()
+		query := fmt.Sprintf(
+			"DELETE FROM %s WHERE id IN (SELECT id FROM %s WHERE %s ORDER BY id LIMIT %d)",
+			table, table, whereClause, batchSize,
+		)
+
+		result, err := sqlDriver.ExecContext(ctx, query, whereArgs...)
 		if err != nil {
-			return totalDeleted, fmt.Errorf("failed to delete batch: %w", err)
+			return totalDeleted, fmt.Errorf("failed to delete batch from %s: %w", table, err)
 		}
 
-		if deleted == 0 {
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return totalDeleted, fmt.Errorf("failed to get rows affected: %w", err)
+		}
+
+		if affected == 0 {
 			break
 		}
 
-		totalDeleted += deleted
-		log.Debug(ctx, "Deleted batch of records", log.Int("batch_size", deleted), log.Int("total_deleted", totalDeleted))
+		totalDeleted += int(affected)
+		log.Debug(ctx, "Deleted batch of records",
+			log.String("table", table),
+			log.Int("batch_size", int(affected)),
+			log.Int("total_deleted", totalDeleted),
+		)
+
+		if int(affected) < batchSize {
+			break
+		}
+
+		time.Sleep(batchInterval)
 	}
 
 	return totalDeleted, nil
+}
+
+// getSQLDriver returns the underlying sql driver for raw queries.
+func (w *Worker) getSQLDriver() (*entsql.Driver, error) {
+	dbDriver := w.Ent.Driver()
+	if dbDriver == nil {
+		return nil, fmt.Errorf("failed to get database driver")
+	}
+
+	sqlDriver, ok := dbDriver.(*entsql.Driver)
+	if !ok {
+		return nil, fmt.Errorf("database driver is not *entsql.Driver")
+	}
+
+	return sqlDriver, nil
 }
 
 // getBatchSize returns the appropriate batch size for cleanup operations.
@@ -112,7 +157,30 @@ func (w *Worker) runCleanup(ctx context.Context, manual bool) {
 		if option.Enabled {
 			switch option.ResourceType {
 			case "requests":
-				err := w.cleanupRequests(ctx, option.CleanupDays, manual)
+				// Delete usage_logs first to remove FK references before deleting requests.
+				err := w.cleanupUsageLogs(ctx, option.CleanupDays, manual)
+				if err != nil {
+					log.Error(ctx, "Failed to cleanup usage logs",
+						log.String("resource", "usage_logs"),
+						log.Cause(err))
+				} else {
+					log.Info(ctx, "Successfully cleaned up usage logs",
+						log.String("resource", "usage_logs"),
+						log.Int("cleanup_days", option.CleanupDays))
+				}
+
+				err = w.cleanupTraces(ctx, option.CleanupDays, manual)
+				if err != nil {
+					log.Error(ctx, "Failed to cleanup traces",
+						log.String("resource", "traces"),
+						log.Cause(err))
+				} else {
+					log.Info(ctx, "Successfully cleaned up traces",
+						log.String("resource", "traces"),
+						log.Int("cleanup_days", option.CleanupDays))
+				}
+
+				err = w.cleanupRequests(ctx, option.CleanupDays, manual)
 				if err != nil {
 					log.Error(ctx, "Failed to cleanup requests",
 						log.String("resource", option.ResourceType),
@@ -131,17 +199,6 @@ func (w *Worker) runCleanup(ctx context.Context, manual bool) {
 				} else {
 					log.Info(ctx, "Successfully cleaned up threads",
 						log.String("resource", "threads"),
-						log.Int("cleanup_days", option.CleanupDays))
-				}
-
-				err = w.cleanupTraces(ctx, option.CleanupDays, manual)
-				if err != nil {
-					log.Error(ctx, "Failed to cleanup traces",
-						log.String("resource", "traces"),
-						log.Cause(err))
-				} else {
-					log.Info(ctx, "Successfully cleaned up traces",
-						log.String("resource", "traces"),
 						log.Int("cleanup_days", option.CleanupDays))
 				}
 			case "usage_logs":
@@ -253,6 +310,12 @@ func (w *Worker) cleanupOldRequestExecutions(ctx context.Context, cutoffTime tim
 		)
 
 		totalDeleted += len(ids)
+
+		if len(ids) < batchSize {
+			break
+		}
+
+		time.Sleep(batchInterval)
 	}
 
 	return totalDeleted, nil
@@ -290,6 +353,12 @@ func (w *Worker) cleanupOldRequestsRecords(ctx context.Context, cutoffTime time.
 		}
 
 		totalDeleted += len(ids)
+
+		if len(ids) < batchSize {
+			break
+		}
+
+		time.Sleep(batchInterval)
 	}
 
 	return totalDeleted, nil
@@ -396,9 +465,7 @@ func (w *Worker) cleanupUsageLogs(ctx context.Context, cleanupDays int, manual b
 		cutoffTime = time.Now()
 	}
 
-	result, err := w.deleteInBatches(ctx, func() (int, error) {
-		return w.Ent.UsageLog.Delete().Where(usagelog.CreatedAtLT(cutoffTime)).Exec(ctx)
-	})
+	result, err := w.deleteBatched(ctx, usagelog.Table, "created_at < $1", cutoffTime)
 	if err != nil {
 		return fmt.Errorf("failed to delete old usage logs: %w", err)
 	}
@@ -422,9 +489,7 @@ func (w *Worker) cleanupThreads(ctx context.Context, cleanupDays int, manual boo
 		cutoffTime = time.Now()
 	}
 
-	result, err := w.deleteInBatches(ctx, func() (int, error) {
-		return w.Ent.Thread.Delete().Where(thread.CreatedAtLT(cutoffTime)).Exec(ctx)
-	})
+	result, err := w.deleteBatched(ctx, thread.Table, "created_at < $1", cutoffTime)
 	if err != nil {
 		return fmt.Errorf("failed to delete old threads: %w", err)
 	}
@@ -448,9 +513,7 @@ func (w *Worker) cleanupTraces(ctx context.Context, cleanupDays int, manual bool
 		cutoffTime = time.Now()
 	}
 
-	result, err := w.deleteInBatches(ctx, func() (int, error) {
-		return w.Ent.Trace.Delete().Where(trace.CreatedAtLT(cutoffTime)).Exec(ctx)
-	})
+	result, err := w.deleteBatched(ctx, trace.Table, "created_at < $1", cutoffTime)
 	if err != nil {
 		return fmt.Errorf("failed to delete old traces: %w", err)
 	}
@@ -474,9 +537,7 @@ func (w *Worker) cleanupChannelProbes(ctx context.Context, cleanupDays int, manu
 		cutoffTime = time.Now()
 	}
 
-	result, err := w.deleteInBatches(ctx, func() (int, error) {
-		return w.Ent.ChannelProbe.Delete().Where(channelprobe.TimestampLT(cutoffTime.Unix())).Exec(ctx)
-	})
+	result, err := w.deleteBatched(ctx, channelprobe.Table, "timestamp < $1", cutoffTime.Unix())
 	if err != nil {
 		return fmt.Errorf("failed to delete old channel probes: %w", err)
 	}
@@ -495,15 +556,9 @@ func (w *Worker) runVacuum(ctx context.Context) error {
 		return nil
 	}
 
-	dbDriver := w.Ent.Driver()
-	if dbDriver == nil {
-		return fmt.Errorf("failed to get database driver")
-	}
-
-	sqlDriver, ok := dbDriver.(*entsql.Driver)
-	if !ok {
-		log.Debug(ctx, "Database driver is not *entsql.Driver, skipping VACUUM")
-		return nil
+	sqlDriver, err := w.getSQLDriver()
+	if err != nil {
+		return err
 	}
 
 	if sqlDriver.Dialect() != dialect.SQLite && sqlDriver.Dialect() != dialect.Postgres {
@@ -513,28 +568,46 @@ func (w *Worker) runVacuum(ctx context.Context) error {
 		return nil
 	}
 
-	log.Info(ctx, "Starting database VACUUM operation",
-		log.String("dialect", sqlDriver.Dialect()),
-		log.Bool("vacuum_full", w.Config.VacuumFull))
-
 	startTime := time.Now()
 
-	var vacuumSQL string
-	if sqlDriver.Dialect() == dialect.Postgres && w.Config.VacuumFull {
-		vacuumSQL = "VACUUM FULL"
-	} else {
-		vacuumSQL = "VACUUM"
-	}
+	if sqlDriver.Dialect() == dialect.SQLite {
+		log.Info(ctx, "Starting database VACUUM operation",
+			log.String("dialect", sqlDriver.Dialect()))
 
-	_, err := sqlDriver.ExecContext(ctx, vacuumSQL, nil, nil)
-	if err != nil {
-		return fmt.Errorf("failed to execute %s: %w", vacuumSQL, err)
+		if _, err := sqlDriver.ExecContext(ctx, "VACUUM"); err != nil {
+			return fmt.Errorf("failed to execute VACUUM: %w", err)
+		}
+	} else {
+		// PostgreSQL: VACUUM FULL locks the entire database with ACCESS EXCLUSIVE.
+		// Use per-table VACUUM instead to avoid blocking all reads/writes.
+		tables := []string{
+			request.Table,
+			requestexecution.Table,
+			usagelog.Table,
+			trace.Table,
+			thread.Table,
+			channelprobe.Table,
+		}
+
+		vacuumCmd := "VACUUM"
+		if w.Config.VacuumFull {
+			log.Warn(ctx, "VACUUM FULL is not recommended for PostgreSQL in production; using regular VACUUM per table instead")
+		}
+
+		for _, table := range tables {
+			log.Debug(ctx, "Vacuuming table", log.String("table", table))
+
+			if _, err := sqlDriver.ExecContext(ctx, vacuumCmd+" "+table); err != nil {
+				log.Warn(ctx, "Failed to vacuum table",
+					log.String("table", table),
+					log.Cause(err))
+			}
+		}
 	}
 
 	duration := time.Since(startTime)
 	log.Info(ctx, "Database VACUUM completed successfully",
-		log.Duration("duration", duration),
-		log.String("command", vacuumSQL))
+		log.Duration("duration", duration))
 
 	return nil
 }

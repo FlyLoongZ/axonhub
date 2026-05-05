@@ -203,43 +203,6 @@ func pathForKey(baseDir, key string) string {
 	return filepath.Join(baseDir, filepath.FromSlash(rel))
 }
 
-func TestWorker_deleteInBatches(t *testing.T) {
-	// Test that the deleteInBatches method works correctly
-	// This test verifies the loop logic without needing a real database
-	worker := &Worker{
-		Ent:    nil,
-		Config: Config{CRON: "0 0 * * *"},
-	}
-
-	// Simulate batch deletion - delete 3 times, with decreasing counts
-	callCount := 0
-	deleteFunc := func() (int, error) {
-		callCount++
-		if callCount == 1 {
-			return 30, nil
-		} else if callCount == 2 {
-			return 15, nil
-		} else {
-			return 0, nil
-		}
-	}
-
-	deleted, err := worker.deleteInBatches(context.Background(), deleteFunc)
-	if err != nil {
-		t.Fatalf("deleteInBatches failed: %v", err)
-	}
-
-	// Verify total deleted
-	if deleted != 45 {
-		t.Errorf("Expected to delete 45 records total, got %d", deleted)
-	}
-
-	// Verify it stopped after third call (when 0 was returned)
-	if callCount != 3 {
-		t.Errorf("Expected 3 delete calls, got %d", callCount)
-	}
-}
-
 func TestWorker_cleanupWithZeroDays(t *testing.T) {
 	worker := &Worker{
 		Ent:    nil,
