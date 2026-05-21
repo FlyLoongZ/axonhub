@@ -2,7 +2,10 @@ package gc
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"strings"
 	"time"
 
 	"entgo.io/ent/dialect"
@@ -27,6 +30,18 @@ var defaultBatchSize = 500
 
 // batchInterval is the sleep duration between batch deletions to reduce CPU pressure.
 var batchInterval = 100 * time.Millisecond
+
+// batchTimeout is the maximum time allowed for a single batch operation (SELECT + external cleanup + DELETE).
+var batchTimeout = 30 * time.Second
+
+// gcRetryBase is the initial backoff duration for retrying a failed batch.
+var gcRetryBase = 500 * time.Millisecond
+
+// gcRetryMax is the maximum backoff duration between retries.
+var gcRetryMax = 10 * time.Second
+
+// gcMaxRetries is the maximum number of retries for a single batch before giving up.
+var gcMaxRetries = 3
 
 type Config struct {
 	CRON          string `json:"cron" yaml:"cron" conf:"cron" validate:"required"`
@@ -82,19 +97,31 @@ func (w *Worker) deleteBatched(ctx context.Context, table string, whereClause st
 	totalDeleted := 0
 
 	for {
+		select {
+		case <-ctx.Done():
+			return totalDeleted, ctx.Err()
+		default:
+		}
+
 		query := fmt.Sprintf(
 			"DELETE FROM %s WHERE id IN (SELECT id FROM %s WHERE %s ORDER BY id LIMIT %d)",
 			table, table, whereClause, batchSize,
 		)
 
-		result, err := sqlDriver.ExecContext(ctx, query, whereArgs...)
-		if err != nil {
-			return totalDeleted, fmt.Errorf("failed to delete batch from %s: %w", table, err)
-		}
+		var affected int64
+		err = retryWithBackoff(ctx, gcMaxRetries, func(retryCtx context.Context) error {
+			batchCtx, batchCancel := context.WithTimeout(retryCtx, batchTimeout)
+			defer batchCancel()
 
-		affected, err := result.RowsAffected()
+			result, execErr := sqlDriver.ExecContext(batchCtx, query, whereArgs...)
+			if execErr != nil {
+				return execErr
+			}
+			affected, execErr = result.RowsAffected()
+			return execErr
+		})
 		if err != nil {
-			return totalDeleted, fmt.Errorf("failed to get rows affected: %w", err)
+			return totalDeleted, fmt.Errorf("failed to delete batch from %s after retries: %w", table, err)
 		}
 
 		if affected == 0 {
@@ -136,6 +163,67 @@ func (w *Worker) getSQLDriver() (*entsql.Driver, error) {
 // getBatchSize returns the appropriate batch size for cleanup operations.
 func (w *Worker) getBatchSize() int {
 	return defaultBatchSize
+}
+
+// transientDBError reports whether err is a transient database error that can be retried.
+func transientDBError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToLower(err.Error())
+	for _, candidate := range []string{
+		"connection reset",
+		"connection refused",
+		"broken pipe",
+		"connection timeout",
+		"deadline exceeded",
+		"could not receive",
+		"could not send",
+		"connection to client lost",
+		"no such host",
+		"ssl syscall",
+		"i/o timeout",
+	} {
+		if strings.Contains(errStr, candidate) {
+			return true
+		}
+	}
+	return errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, io.EOF)
+}
+
+// retryWithBackoff executes f up to maxRetries+1 times with exponential backoff.
+// Only transient errors trigger a retry; permanent errors are returned immediately.
+func retryWithBackoff(ctx context.Context, maxRetries int, f func(context.Context) error) error {
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := gcRetryBase * (1 << (attempt - 1))
+			if delay > gcRetryMax {
+				delay = gcRetryMax
+			}
+			log.Warn(ctx, "Retrying GC batch after transient error",
+				log.Int("attempt", attempt),
+				log.Int("max_retries", maxRetries),
+				log.Duration("backoff", delay),
+				log.Cause(lastErr),
+			)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(delay):
+			}
+		}
+		lastErr = f(ctx)
+		if lastErr == nil {
+			return nil
+		}
+		if !transientDBError(lastErr) {
+			return lastErr
+		}
+	}
+	return fmt.Errorf("gc retries exhausted after %d attempts: %w", maxRetries+1, lastErr)
 }
 
 // runCleanup executes the cleanup process based on storage policy.
@@ -277,14 +365,36 @@ func (w *Worker) cleanupOldRequestExecutions(ctx context.Context, cutoffTime tim
 	totalDeleted := 0
 	cache := make(map[int]*ent.DataStorage)
 
+	// lastID tracks the last successfully processed execution ID for resumability.
+	var lastID int
+
 	for {
-		executions, err := w.Ent.RequestExecution.Query().
-			Where(requestexecution.CreatedAtLT(cutoffTime)).
-			Order(ent.Asc(requestexecution.FieldID)).
-			Limit(batchSize).
-			All(ctx)
+		select {
+		case <-ctx.Done():
+			return totalDeleted, ctx.Err()
+		default:
+		}
+
+		// Query with per-batch timeout and retry.
+		var executions []*ent.RequestExecution
+		err := retryWithBackoff(ctx, gcMaxRetries, func(retryCtx context.Context) error {
+			batchCtx, batchCancel := context.WithTimeout(retryCtx, batchTimeout)
+			defer batchCancel()
+
+			query := w.Ent.RequestExecution.Query().
+				Where(requestexecution.CreatedAtLT(cutoffTime)).
+				Order(ent.Asc(requestexecution.FieldID)).
+				Limit(batchSize)
+			if lastID > 0 {
+				query = query.Where(requestexecution.IDGT(lastID))
+			}
+
+			var qErr error
+			executions, qErr = query.All(batchCtx)
+			return qErr
+		})
 		if err != nil {
-			return totalDeleted, fmt.Errorf("failed to query old request executions: %w", err)
+			return totalDeleted, fmt.Errorf("failed to query old request executions after retries (last_id=%d): %w", lastID, err)
 		}
 
 		if len(executions) == 0 {
@@ -292,24 +402,43 @@ func (w *Worker) cleanupOldRequestExecutions(ctx context.Context, cutoffTime tim
 		}
 
 		ids := make([]int, len(executions))
-
 		for i, exec := range executions {
 			ids[i] = exec.ID
-			w.cleanupExecutionExternalStorage(ctx, exec, cache)
+
+			// External storage cleanup with its own timeout.
+			func() {
+				cleanupCtx, cleanupCancel := context.WithTimeout(ctx, 10*time.Second)
+				defer cleanupCancel()
+				w.cleanupExecutionExternalStorage(cleanupCtx, exec, cache)
+			}()
 		}
 
-		if _, err := w.Ent.RequestExecution.Delete().
-			Where(requestexecution.IDIn(ids...)).
-			Exec(ctx); err != nil {
-			return totalDeleted, fmt.Errorf("failed to delete request executions batch: %w", err)
+		// Delete with per-batch timeout and retry.
+		err = retryWithBackoff(ctx, gcMaxRetries, func(retryCtx context.Context) error {
+			deleteCtx, deleteCancel := context.WithTimeout(retryCtx, batchTimeout)
+			defer deleteCancel()
+
+			_, delErr := w.Ent.RequestExecution.Delete().
+				Where(requestexecution.IDIn(ids...)).
+				Exec(deleteCtx)
+			return delErr
+		})
+		if err != nil {
+			return totalDeleted, fmt.Errorf(
+				"failed to delete request executions batch after retries (last_id=%d, deleted_so_far=%d): %w",
+				lastID, totalDeleted, err,
+			)
 		}
 
 		log.Debug(ctx, "Deleted old request executions batch",
 			log.Int("deleted_executions_count", len(ids)),
+			log.Int("total_deleted", totalDeleted+len(ids)),
+			log.Int("last_id", ids[len(ids)-1]),
 			log.Time("cutoff_time", cutoffTime),
 		)
 
 		totalDeleted += len(ids)
+		lastID = ids[len(ids)-1]
 
 		if len(ids) < batchSize {
 			break
@@ -326,14 +455,36 @@ func (w *Worker) cleanupOldRequestsRecords(ctx context.Context, cutoffTime time.
 	totalDeleted := 0
 	cache := make(map[int]*ent.DataStorage)
 
+	// lastID tracks the last successfully processed request ID for resumability.
+	var lastID int
+
 	for {
-		reqs, err := w.Ent.Request.Query().
-			Where(request.CreatedAtLT(cutoffTime)).
-			Order(ent.Asc(request.FieldID)).
-			Limit(batchSize).
-			All(ctx)
+		select {
+		case <-ctx.Done():
+			return totalDeleted, ctx.Err()
+		default:
+		}
+
+		// Query with per-batch timeout and retry.
+		var reqs []*ent.Request
+		err := retryWithBackoff(ctx, gcMaxRetries, func(retryCtx context.Context) error {
+			batchCtx, batchCancel := context.WithTimeout(retryCtx, batchTimeout)
+			defer batchCancel()
+
+			query := w.Ent.Request.Query().
+				Where(request.CreatedAtLT(cutoffTime)).
+				Order(ent.Asc(request.FieldID)).
+				Limit(batchSize)
+			if lastID > 0 {
+				query = query.Where(request.IDGT(lastID))
+			}
+
+			var qErr error
+			reqs, qErr = query.All(batchCtx)
+			return qErr
+		})
 		if err != nil {
-			return totalDeleted, fmt.Errorf("failed to query old requests: %w", err)
+			return totalDeleted, fmt.Errorf("failed to query old requests after retries (last_id=%d): %w", lastID, err)
 		}
 
 		if len(reqs) == 0 {
@@ -343,16 +494,41 @@ func (w *Worker) cleanupOldRequestsRecords(ctx context.Context, cutoffTime time.
 		ids := make([]int, len(reqs))
 		for i, req := range reqs {
 			ids[i] = req.ID
-			w.cleanupRequestExternalStorage(ctx, req, cache)
+
+			// External storage cleanup with its own timeout.
+			func() {
+				cleanupCtx, cleanupCancel := context.WithTimeout(ctx, 10*time.Second)
+				defer cleanupCancel()
+				w.cleanupRequestExternalStorage(cleanupCtx, req, cache)
+			}()
 		}
 
-		if _, err := w.Ent.Request.Delete().
-			Where(request.IDIn(ids...)).
-			Exec(ctx); err != nil {
-			return totalDeleted, fmt.Errorf("failed to delete requests batch: %w", err)
+		// Delete with per-batch timeout and retry.
+		err = retryWithBackoff(ctx, gcMaxRetries, func(retryCtx context.Context) error {
+			deleteCtx, deleteCancel := context.WithTimeout(retryCtx, batchTimeout)
+			defer deleteCancel()
+
+			_, delErr := w.Ent.Request.Delete().
+				Where(request.IDIn(ids...)).
+				Exec(deleteCtx)
+			return delErr
+		})
+		if err != nil {
+			return totalDeleted, fmt.Errorf(
+				"failed to delete requests batch after retries (last_id=%d, deleted_so_far=%d): %w",
+				lastID, totalDeleted, err,
+			)
 		}
+
+		log.Debug(ctx, "Deleted old requests batch",
+			log.Int("deleted_requests_count", len(ids)),
+			log.Int("total_deleted", totalDeleted+len(ids)),
+			log.Int("last_id", ids[len(ids)-1]),
+			log.Time("cutoff_time", cutoffTime),
+		)
 
 		totalDeleted += len(ids)
+		lastID = ids[len(ids)-1]
 
 		if len(ids) < batchSize {
 			break
