@@ -23,6 +23,7 @@ import (
 	"github.com/looplj/axonhub/internal/log"
 	"github.com/looplj/axonhub/internal/objects"
 	"github.com/looplj/axonhub/internal/pkg/xcache"
+	"github.com/looplj/axonhub/internal/pkg/xregexp"
 	"github.com/looplj/axonhub/internal/pkg/xtime"
 	"github.com/looplj/axonhub/llm/httpclient"
 )
@@ -218,12 +219,27 @@ type AutoBackupSettings struct {
 	IncludeModels      bool `json:"include_models"`
 	IncludeAPIKeys     bool `json:"include_api_keys"`
 	IncludeModelPrices bool `json:"include_model_prices"`
+	IncludeUsageStats  bool `json:"include_usage_stats"`
 	// RetentionDays defines how many days to keep backups (0 = keep all)
 	RetentionDays int `json:"retention_days"`
 	// LastBackupAt is the timestamp of the last successful backup
 	LastBackupAt *time.Time `json:"last_backup_at,omitempty"`
 	// LastBackupError is the error message from the last backup attempt (if any)
 	LastBackupError string `json:"last_backup_error,omitempty"`
+}
+
+type autoBackupSettingsJSON struct {
+	Enabled            bool            `json:"enabled"`
+	Frequency          BackupFrequency `json:"frequency"`
+	DataStorageID      int             `json:"data_storage_id"`
+	IncludeChannels    bool            `json:"include_channels"`
+	IncludeModels      bool            `json:"include_models"`
+	IncludeAPIKeys     bool            `json:"include_api_keys"`
+	IncludeModelPrices bool            `json:"include_model_prices"`
+	IncludeUsageStats  *bool           `json:"include_usage_stats"`
+	RetentionDays      int             `json:"retention_days"`
+	LastBackupAt       *time.Time      `json:"last_backup_at,omitempty"`
+	LastBackupError    string          `json:"last_backup_error,omitempty"`
 }
 
 // StoragePolicy represents the storage policy configuration.
@@ -251,7 +267,18 @@ const (
 
 	// LoadBalancerStrategyCircuitBreaker is a dynamic load balancer strategy that monitors the health of channels and fails over to a backup channel when the primary channel is unhealthy.
 	LoadBalancerStrategyCircuitBreaker = "circuit-breaker"
+
+	// UpstreamErrorModePassthrough keeps provider errors unchanged.
+	UpstreamErrorModePassthrough = "passthrough"
+
+	// UpstreamErrorModeHidden replaces provider errors with a safe default message.
+	UpstreamErrorModeHidden = "hidden"
+
+	// UpstreamErrorModeCustom replaces provider errors with an admin-defined message.
+	UpstreamErrorModeCustom = "custom"
 )
+
+const DefaultUpstreamErrorMessage = "Upstream provider request failed. Please try again later."
 
 // RetryPolicy represents the retry policy configuration.
 type RetryPolicy struct {
@@ -276,6 +303,17 @@ type RetryPolicy struct {
 	// When enabled, the pipeline pre-reads stream events to check if the response
 	// contains meaningful content, and marks empty responses as failed attempts for retry handling.
 	EmptyResponseDetection bool `json:"empty_response_detection"`
+
+	// UpstreamErrorPolicy controls how provider errors are exposed to API users.
+	UpstreamErrorPolicy UpstreamErrorPolicy `json:"upstream_error_policy"`
+}
+
+type UpstreamErrorPolicy struct {
+	// Mode controls whether provider errors are passed through, hidden, or replaced with a custom message.
+	Mode string `json:"mode"`
+
+	// CustomMessage is returned to API users when Mode is custom.
+	CustomMessage string `json:"custom_message"`
 }
 
 type AutoDisableChannel struct {
@@ -340,6 +378,23 @@ type SystemModelSettings struct {
 	// When true, the suffix is stripped from model and applied to request.reasoning_effort,
 	// overriding any reasoning_effort already set in the request.
 	AutoReasoningEffort bool `json:"auto_reasoning_effort"`
+
+	// ModelBlacklistRegex is a regex pattern. When QueryAllChannelModels is true,
+	// channel-derived model IDs matching this pattern are excluded from the models
+	// API output. Configured Model entities are not affected. An empty string
+	// disables the filter. Only effective when QueryAllChannelModels is true.
+	ModelBlacklistRegex string `json:"model_blacklist_regex"`
+
+	// DeveloperSettings stores reusable channel association rules keyed by model developer.
+	// Models with the same developer inherit these associations before applying their
+	// own model-level associations.
+	DeveloperSettings []*DeveloperModelSettings `json:"developer_settings"`
+}
+
+// DeveloperModelSettings represents reusable model association rules for one model developer.
+type DeveloperModelSettings struct {
+	Developer    string                      `json:"developer"`
+	Associations []*objects.ModelAssociation `json:"associations"`
 }
 
 type SystemChannelSettings struct {
@@ -850,6 +905,12 @@ func (s *SystemService) StoragePolicyOrDefault(ctx context.Context) *StoragePoli
 
 // SetStoragePolicy sets the storage policy configuration.
 func (s *SystemService) SetStoragePolicy(ctx context.Context, policy *StoragePolicy) error {
+	for _, opt := range policy.CleanupOptions {
+		if opt.CleanupDays <= 0 {
+			return fmt.Errorf("cleanup_days for %q must be positive; set enabled=false to keep data forever", opt.ResourceType)
+		}
+	}
+
 	jsonBytes, err := json.Marshal(policy)
 	if err != nil {
 		return fmt.Errorf("failed to marshal storage policy: %w", err)
@@ -925,6 +986,17 @@ func normalizeRetryPolicy(policy *RetryPolicy) {
 
 	if policy.AutoDisableChannel.Statuses == nil {
 		policy.AutoDisableChannel.Statuses = []AutoDisableChannelStatus{}
+	}
+
+	switch policy.UpstreamErrorPolicy.Mode {
+	case UpstreamErrorModePassthrough, UpstreamErrorModeHidden, UpstreamErrorModeCustom:
+	default:
+		policy.UpstreamErrorPolicy.Mode = defaultRetryPolicy.UpstreamErrorPolicy.Mode
+	}
+
+	if policy.UpstreamErrorPolicy.Mode == UpstreamErrorModeCustom &&
+		strings.TrimSpace(policy.UpstreamErrorPolicy.CustomMessage) == "" {
+		policy.UpstreamErrorPolicy.Mode = UpstreamErrorModeHidden
 	}
 }
 
@@ -1007,6 +1079,7 @@ func (s *SystemService) ModelSettings(ctx context.Context) (*SystemModelSettings
 	if err := json.Unmarshal([]byte(value), &settings); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal model settings: %w", err)
 	}
+	normalizeSystemModelSettings(&settings)
 
 	return &settings, nil
 }
@@ -1029,6 +1102,15 @@ func (s *SystemService) ModelSettingsOrDefault(ctx context.Context) *SystemModel
 
 // SetModelSettings sets the model settings configuration.
 func (s *SystemService) SetModelSettings(ctx context.Context, settings SystemModelSettings) error {
+	if err := xregexp.ValidateRegex(settings.ModelBlacklistRegex); err != nil {
+		return fmt.Errorf("invalid model blacklist regex: %w", err)
+	}
+
+	normalizeSystemModelSettings(&settings)
+	if err := validateSystemModelSettings(&settings); err != nil {
+		return err
+	}
+
 	jsonBytes, err := json.Marshal(settings)
 	if err != nil {
 		return fmt.Errorf("failed to marshal model settings: %w", err)
@@ -1219,9 +1301,28 @@ func (s *SystemService) AutoBackupSettings(ctx context.Context) (*AutoBackupSett
 		return nil, fmt.Errorf("failed to get auto backup settings: %w", err)
 	}
 
-	var settings AutoBackupSettings
-	if err := json.Unmarshal([]byte(value), &settings); err != nil {
+	var stored autoBackupSettingsJSON
+	if err := json.Unmarshal([]byte(value), &stored); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal auto backup settings: %w", err)
+	}
+
+	includeUsageStats := defaultAutoBackupSettings.IncludeUsageStats
+	if stored.IncludeUsageStats != nil {
+		includeUsageStats = *stored.IncludeUsageStats
+	}
+
+	settings := AutoBackupSettings{
+		Enabled:            stored.Enabled,
+		Frequency:          stored.Frequency,
+		DataStorageID:      stored.DataStorageID,
+		IncludeChannels:    stored.IncludeChannels,
+		IncludeModels:      stored.IncludeModels,
+		IncludeAPIKeys:     stored.IncludeAPIKeys,
+		IncludeModelPrices: stored.IncludeModelPrices,
+		IncludeUsageStats:  includeUsageStats,
+		RetentionDays:      stored.RetentionDays,
+		LastBackupAt:       stored.LastBackupAt,
+		LastBackupError:    stored.LastBackupError,
 	}
 
 	return &settings, nil

@@ -331,14 +331,18 @@ func TestMessage_ToLLMMessage_WithAnnotations(t *testing.T) {
 				Content: MessageContent{Content: lo.ToPtr("The meaning of life...")},
 				Annotations: []Annotation{
 					{
-						Type: "url_citation",
+						Type:       "url_citation",
+						StartIndex: lo.ToPtr(int64(0)),
+						EndIndex:   lo.ToPtr(int64(11)),
 						URLCitation: &URLCitation{
 							URL:   "https://en.wikipedia.org/wiki/Meaning_of_life",
 							Title: "Meaning of life - Wikipedia",
 						},
 					},
 					{
-						Type: "url_citation",
+						Type:       "url_citation",
+						StartIndex: lo.ToPtr(int64(20)),
+						EndIndex:   lo.ToPtr(int64(27)),
 						URLCitation: &URLCitation{
 							URL:   "https://plato.stanford.edu/entries/life-meaning/",
 							Title: "The Meaning of Life - Stanford Encyclopedia",
@@ -350,9 +354,17 @@ func TestMessage_ToLLMMessage_WithAnnotations(t *testing.T) {
 				require.Equal(t, "assistant", msg.Role)
 				require.Len(t, msg.Annotations, 2)
 				require.Equal(t, "url_citation", msg.Annotations[0].Type)
+				require.NotNil(t, msg.Annotations[0].StartIndex)
+				require.Equal(t, int64(0), *msg.Annotations[0].StartIndex)
+				require.NotNil(t, msg.Annotations[0].EndIndex)
+				require.Equal(t, int64(11), *msg.Annotations[0].EndIndex)
 				require.NotNil(t, msg.Annotations[0].URLCitation)
 				require.Equal(t, "https://en.wikipedia.org/wiki/Meaning_of_life", msg.Annotations[0].URLCitation.URL)
 				require.Equal(t, "Meaning of life - Wikipedia", msg.Annotations[0].URLCitation.Title)
+				require.NotNil(t, msg.Annotations[1].StartIndex)
+				require.Equal(t, int64(20), *msg.Annotations[1].StartIndex)
+				require.NotNil(t, msg.Annotations[1].EndIndex)
+				require.Equal(t, int64(27), *msg.Annotations[1].EndIndex)
 			},
 		},
 		{
@@ -493,7 +505,7 @@ func TestRequestFromLLM_KeepsGoogleThoughtSignatureInRequestModel(t *testing.T) 
 		Messages: []llm.Message{
 			{
 				Role:               "assistant",
-				ReasoningSignature: shared.EncodeGeminiThoughtSignature(lo.ToPtr("sig_from_reasoning"), ""),
+				ReasoningSignature: shared.EncodeGeminiThoughtSignature(lo.ToPtr("sig_from_reasoning")),
 				ToolCalls: []llm.ToolCall{
 					{
 						ID:   "call_1",
@@ -523,7 +535,7 @@ func TestRequestFromLLM_KeepsGoogleThoughtSignatureInRequestModel(t *testing.T) 
 func TestMessageFromLLM_DoesNotOverrideFirstToolCallWhenMetadataExists(t *testing.T) {
 	msg := MessageFromLLM(llm.Message{
 		Role:               "assistant",
-		ReasoningSignature: shared.EncodeGeminiThoughtSignature(lo.ToPtr("sig_from_second_tool_call"), ""),
+		ReasoningSignature: shared.EncodeGeminiThoughtSignature(lo.ToPtr("sig_from_second_tool_call")),
 		ToolCalls: []llm.ToolCall{
 			{
 				ID:   "call_1",
@@ -559,7 +571,7 @@ func TestMessageFromLLM_DoesNotOverrideFirstToolCallWhenMetadataExists(t *testin
 func TestMessageFromLLM_GeminiReasoningSignatureDoesNotInjectThoughtSignature(t *testing.T) {
 	msg := MessageFromLLM(llm.Message{
 		Role:               "assistant",
-		ReasoningSignature: shared.EncodeGeminiThoughtSignature(lo.ToPtr("gemini_signature"), ""),
+		ReasoningSignature: shared.EncodeGeminiThoughtSignature(lo.ToPtr("gemini_signature")),
 		ToolCalls: []llm.ToolCall{
 			{
 				ID:   "call_1",

@@ -3,13 +3,14 @@ package db
 import "time"
 
 type Config struct {
-	Dialect         string        `conf:"dialect" yaml:"dialect" json:"dialect"`
-	DSN             string        `conf:"dsn" yaml:"dsn" json:"dsn"`
-	Debug           bool          `conf:"debug" yaml:"debug" json:"debug"`
-	MaxOpenConns    int           `conf:"max_open_conns" yaml:"max_open_conns" json:"max_open_conns"`
-	MaxIdleConns    int           `conf:"max_idle_conns" yaml:"max_idle_conns" json:"max_idle_conns"`
-	ConnMaxLifetime time.Duration `conf:"conn_max_lifetime" yaml:"conn_max_lifetime" json:"conn_max_lifetime"`
-	ConnMaxIdleTime time.Duration `conf:"conn_max_idle_time" yaml:"conn_max_idle_time" json:"conn_max_idle_time"`
+	Dialect              string        `conf:"dialect" yaml:"dialect" json:"dialect"`
+	DSN                  string        `conf:"dsn" yaml:"dsn" json:"dsn"`
+	Debug                bool          `conf:"debug" yaml:"debug" json:"debug"`
+	MaxOpenConns         int           `conf:"max_open_conns" yaml:"max_open_conns" json:"max_open_conns"`
+	MaxIdleConns         int           `conf:"max_idle_conns" yaml:"max_idle_conns" json:"max_idle_conns"`
+	ConnMaxLifetime      time.Duration `conf:"conn_max_lifetime" yaml:"conn_max_lifetime" json:"conn_max_lifetime"`
+	ConnMaxIdleTime      time.Duration `conf:"conn_max_idle_time" yaml:"conn_max_idle_time" json:"conn_max_idle_time"`
+	DisableSQLiteAutoWAL bool          `conf:"disable_sqlite_auto_wal" yaml:"disable_sqlite_auto_wal" json:"disable_sqlite_auto_wal"`
 
 	// HealthCheckPeriod is the interval between health checks on idle connections.
 	// Only used when dialect is postgres (pgxpool). If zero, pgxpool's default (1m) is used.

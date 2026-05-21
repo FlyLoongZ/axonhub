@@ -137,11 +137,10 @@ func TestOutboundTransformer_APIFormat(t *testing.T) {
 	require.Equal(t, llm.APIFormatOpenAIResponse, transformer.APIFormat())
 }
 
-func TestOutboundTransformer_TransformRequest_AccountIdentityFootprint(t *testing.T) {
+func TestOutboundTransformer_TransformRequest_AccountIdentity(t *testing.T) {
 	transformer, err := NewOutboundTransformerWithConfig(&Config{
-		BaseURL:         "https://api.openai.com",
-		APIKeyProvider:  auth.NewStaticKeyProvider("test-api-key"),
-		AccountIdentity: "channel-1",
+		BaseURL:        "https://api.openai.com",
+		APIKeyProvider: auth.NewStaticKeyProvider("test-api-key"),
 	})
 	require.NoError(t, err)
 
@@ -154,13 +153,10 @@ func TestOutboundTransformer_TransformRequest_AccountIdentityFootprint(t *testin
 
 	hreq, err := transformer.TransformRequest(context.Background(), req)
 	require.NoError(t, err)
-	require.NotNil(t, hreq.Metadata)
-
-	require.Equal(t, transformer.config.BaseURL, hreq.Metadata[shared.MetadataKeyBaseURL])
-	require.Equal(t, "channel-1", hreq.Metadata[shared.MetadataKeyAccountIdentity])
+	require.Nil(t, hreq.Metadata)
 }
 
-func TestOutboundTransformer_TransformRequest_OmitsFootprintWhenEmpty(t *testing.T) {
+func TestOutboundTransformer_TransformRequest_OmitsMetadataWhenEmpty(t *testing.T) {
 	transformer, err := NewOutboundTransformerWithConfig(&Config{
 		BaseURL:        "https://api.openai.com",
 		APIKeyProvider: auth.NewStaticKeyProvider(""),
@@ -176,7 +172,36 @@ func TestOutboundTransformer_TransformRequest_OmitsFootprintWhenEmpty(t *testing
 
 	hreq, err := transformer.TransformRequest(context.Background(), req)
 	require.NoError(t, err)
-	require.True(t, hreq.Metadata == nil || (hreq.Metadata[shared.MetadataKeyBaseURL] == "" && hreq.Metadata[shared.MetadataKeyAccountIdentity] == ""))
+	require.Nil(t, hreq.Metadata)
+}
+
+func TestOutboundTransformer_TransformRequest_WebSearchRequiredToolChoice(t *testing.T) {
+	transformer, err := NewOutboundTransformer("https://api.openai.com", "test-api-key")
+	require.NoError(t, err)
+
+	req := &llm.Request{
+		Model: "gpt-4o-search-preview",
+		Messages: []llm.Message{{
+			Role: "user",
+			Content: llm.MessageContent{
+				Content: lo.ToPtr("latest ai news"),
+			},
+		}},
+		Tools: []llm.Tool{{
+			Type: llm.ToolTypeWebSearch,
+		}},
+		ToolChoice: &llm.ToolChoice{
+			ToolChoice: lo.ToPtr("required"),
+		},
+	}
+
+	hreq, err := transformer.TransformRequest(context.Background(), req)
+	require.NoError(t, err)
+
+	var payload map[string]any
+	err = json.Unmarshal(hreq.Body, &payload)
+	require.NoError(t, err)
+	require.Equal(t, "required", payload["tool_choice"])
 }
 
 func TestOutboundTransformer_TransformRequest(t *testing.T) {
@@ -314,6 +339,86 @@ func TestOutboundTransformer_TransformRequest(t *testing.T) {
 				require.Equal(t, "1024x1024", req.Tools[0].Size)
 				require.Equal(t, "png", req.Tools[0].OutputFormat)
 				require.Equal(t, int64(80), *req.Tools[0].OutputCompression)
+			},
+		},
+		{
+			name: "request with web search tool",
+			chatReq: &llm.Request{
+				Model: "gpt-4o-search-preview",
+				Messages: []llm.Message{
+					{
+						Role: "user",
+						Content: llm.MessageContent{
+							Content: lo.ToPtr("latest ai news"),
+						},
+					},
+				},
+				Tools: []llm.Tool{
+					{
+						Type: llm.ToolTypeWebSearch,
+						WebSearch: &llm.WebSearch{
+							AllowedDomains: []string{"openai.com"},
+							UserLocation: llm.WebSearchToolUserLocation{
+								Type:    "approximate",
+								Country: "US",
+							},
+						},
+					},
+				},
+			},
+			expectError: false,
+			validate: func(t *testing.T, result *httpclient.Request, chatReq *llm.Request) {
+				var req Request
+
+				err := json.Unmarshal(result.Body, &req)
+				require.NoError(t, err)
+				require.Equal(t, []Tool{
+					{
+						Type: "web_search",
+						Filters: &WebSearchFilters{
+							AllowedDomains: []string{"openai.com"},
+						},
+						UserLocation: &WebSearchUserLocation{
+							Type:    "approximate",
+							Country: "US",
+						},
+					},
+				}, req.Tools)
+			},
+		},
+		{
+			name: "request with google search tool maps to web_search",
+			chatReq: &llm.Request{
+				Model: "gpt-5.4",
+				Messages: []llm.Message{
+					{
+						Role: "user",
+						Content: llm.MessageContent{
+							Content: lo.ToPtr("Search the web for the latest AI announcement."),
+						},
+					},
+				},
+				Tools: []llm.Tool{{
+					Type: llm.ToolTypeGoogleSearch,
+					Google: &llm.GoogleTools{
+						Search: &llm.GoogleSearch{},
+					},
+				}},
+			},
+			expectError: false,
+			validate: func(t *testing.T, result *httpclient.Request, chatReq *llm.Request) {
+				var raw map[string]any
+
+				err := json.Unmarshal(result.Body, &raw)
+				require.NoError(t, err)
+
+				tools, ok := raw["tools"].([]any)
+				require.True(t, ok)
+				require.Len(t, tools, 1)
+
+				tool, ok := tools[0].(map[string]any)
+				require.True(t, ok)
+				require.Equal(t, llm.ToolTypeWebSearch, tool["type"])
 			},
 		},
 		{
@@ -492,7 +597,7 @@ func TestOutboundTransformer_TransformRequest(t *testing.T) {
 			},
 		},
 		{
-			name: "request with tool choice",
+			name: "request with tool choice auto",
 			chatReq: &llm.Request{
 				Model: "gpt-4o",
 				Messages: []llm.Message{

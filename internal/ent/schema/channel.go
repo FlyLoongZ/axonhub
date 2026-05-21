@@ -49,6 +49,7 @@ func (Channel) Fields() []ent.Field {
 				"deepseek",
 				"deepseek_anthropic",
 				"deepinfra",
+				"qiniu",
 				"fireworks",
 				"doubao",
 				"doubao_anthropic",
@@ -87,6 +88,7 @@ func (Channel) Fields() []ent.Field {
 				"antigravity",
 				"nanogpt",
 				"nanogpt_responses",
+				"opencode_go",
 				"ollama",
 			).
 			Annotations(

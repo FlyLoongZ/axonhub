@@ -24,10 +24,12 @@ import {
   Github,
   Claude,
   Cerebras,
+  Qiniu,
   XiaomiMiMo,
   Fireworks,
   Ollama,
   AiHubMix,
+  OpenCode,
 } from '@lobehub/icons';
 import { NanoGPTIcon } from '../components/nanogpt-icon';
 import { BURNCLOUD_DEFAULT_MODELS } from './burncloud-models';
@@ -131,6 +133,14 @@ export const CHANNEL_CONFIGS: Record<ChannelType, ChannelConfig> = {
     apiFormat: OPENAI_CHAT_COMPLETIONS,
     color: 'bg-indigo-100 text-indigo-800 border-indigo-200',
     icon: DeepInfra,
+  },
+  qiniu: {
+    channelType: 'qiniu',
+    baseURL: 'https://api.qnaigc.com/v1',
+    defaultModels: ['deepseek-v3'],
+    apiFormat: OPENAI_CHAT_COMPLETIONS,
+    color: 'bg-blue-100 text-blue-800 border-blue-200',
+    icon: Qiniu,
   },
   anthropic: {
     channelType: 'anthropic',
@@ -588,6 +598,14 @@ export const CHANNEL_CONFIGS: Record<ChannelType, ChannelConfig> = {
     color: 'bg-orange-100 text-orange-800 border-orange-200',
     icon: Fireworks,
   },
+  opencode_go: {
+    channelType: 'opencode_go',
+    baseURL: 'https://opencode.ai/zen/go/v1',
+    defaultModels: ['opencode-go-v1'],
+    apiFormat: OPENAI_CHAT_COMPLETIONS,
+    color: 'bg-indigo-100 text-indigo-800 border-indigo-200',
+    icon: OpenCode,
+  },
   ollama: {
     channelType: 'ollama',
     baseURL: 'https://api.ollama.cloud',
@@ -621,6 +639,7 @@ export type Provider =
   | 'claudecode'
   | 'deepseek'
   | 'deepinfra'
+  | 'qiniu'
   | 'gemini'
   | 'moonshot'
   | 'zhipu'
@@ -647,6 +666,7 @@ export type Provider =
   | 'antigravity'
   | 'nanogpt'
   | 'fireworks'
+  | 'opencode_go'
   | 'ollama';
 
 /**
@@ -663,6 +683,7 @@ export const CHANNEL_TYPE_TO_PROVIDER: Record<ChannelType, Provider> = {
   deepseek: 'deepseek',
   deepseek_anthropic: 'deepseek',
   deepinfra: 'deepinfra',
+  qiniu: 'qiniu',
   gemini: 'gemini',
   gemini_openai: 'gemini',
   gemini_vertex: 'gemini',
@@ -704,6 +725,7 @@ export const CHANNEL_TYPE_TO_PROVIDER: Record<ChannelType, Provider> = {
   nanogpt: 'nanogpt',
   nanogpt_responses: 'nanogpt',
   fireworks: 'fireworks',
+  opencode_go: 'opencode_go',
   ollama: 'ollama',
 };
 

@@ -107,6 +107,7 @@ var defaultEndpointsForChannelType = map[channel.Type][]objects.ChannelEndpoint{
 	channel.TypeDeepseek:          {{APIFormat: llm.APIFormatOpenAIChatCompletion.String()}, {APIFormat: llm.APIFormatOpenAICompletion.String()}},
 	channel.TypeDeepseekAnthropic: {{APIFormat: llm.APIFormatAnthropicMessage.String()}},
 	channel.TypeDeepinfra:         openAICompatibleDefaultEndpoints,
+	channel.TypeQiniu:             {{APIFormat: llm.APIFormatOpenAIChatCompletion.String()}},
 	channel.TypeFireworks:         {{APIFormat: llm.APIFormatOpenAIChatCompletion.String()}},
 	channel.TypeDoubao: {
 		{APIFormat: llm.APIFormatOpenAIChatCompletion.String()},
@@ -151,6 +152,7 @@ var defaultEndpointsForChannelType = map[channel.Type][]objects.ChannelEndpoint{
 	channel.TypeAntigravity:      {{APIFormat: llm.APIFormatGeminiContents.String()}},
 	channel.TypeNanogpt:          openAICompatibleDefaultEndpoints,
 	channel.TypeNanogptResponses: {{APIFormat: llm.APIFormatOpenAIResponse.String()}},
+	channel.TypeOpencodeGo:       openAIChatOnlyDefaultEndpoints,
 	channel.TypeOllama:           {{APIFormat: llm.APIFormatOllamaChat.String()}},
 }
 

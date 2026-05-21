@@ -1070,7 +1070,7 @@ func TestConvertGeminiContentToLLMMessage_ThoughtSignature(t *testing.T) {
 							Name: "check_weather",
 							Args: map[string]any{"city": "Tokyo"},
 						},
-						ThoughtSignature: shared.GeminiThoughtSignaturePrefix + "signature_prefixed",
+						ThoughtSignature: "signature_prefixed",
 					},
 				},
 			},
@@ -1078,15 +1078,15 @@ func TestConvertGeminiContentToLLMMessage_ThoughtSignature(t *testing.T) {
 				t.Helper()
 				require.NotNil(t, result)
 				require.NotNil(t, result.ReasoningSignature)
-				require.Equal(t, shared.GeminiThoughtSignaturePrefix+"signature_prefixed", *result.ReasoningSignature)
-				decoded := shared.DecodeGeminiThoughtSignature(result.ReasoningSignature, "")
+				require.Equal(t, "signature_prefixed", *result.ReasoningSignature)
+				decoded := shared.DecodeGeminiThoughtSignature(result.ReasoningSignature)
 				require.Nil(t, decoded)
 				require.Len(t, result.ToolCalls, 1)
 				require.Equal(t, "call_003", result.ToolCalls[0].ID)
 				require.NotNil(t, result.ToolCalls[0].TransformerMetadata)
 				require.Equal(
 					t,
-					shared.GeminiThoughtSignaturePrefix+"signature_prefixed",
+					"signature_prefixed",
 					result.ToolCalls[0].TransformerMetadata[transformerMetadataKeyGoogleThoughtSignature],
 				)
 			},
@@ -1137,7 +1137,7 @@ func TestConvertLLMChoiceToGeminiCandidate_ThoughtSignature(t *testing.T) {
 				Index: 0,
 				Message: &llm.Message{
 					Role:               "assistant",
-					ReasoningSignature: shared.EncodeGeminiThoughtSignature(lo.ToPtr("signature_prefixed"), ""),
+					ReasoningSignature: shared.EncodeGeminiThoughtSignature(lo.ToPtr("signature_prefixed")),
 					ToolCalls: []llm.ToolCall{
 						{
 							ID:   "call_001",
@@ -1164,7 +1164,7 @@ func TestConvertLLMChoiceToGeminiCandidate_ThoughtSignature(t *testing.T) {
 				Index: 0,
 				Message: &llm.Message{
 					Role:               "assistant",
-					ReasoningSignature: shared.EncodeGeminiThoughtSignature(lo.ToPtr("signature_A"), ""),
+					ReasoningSignature: shared.EncodeGeminiThoughtSignature(lo.ToPtr("signature_A")),
 					ToolCalls: []llm.ToolCall{
 						{
 							ID:   "call_001",
@@ -1193,7 +1193,7 @@ func TestConvertLLMChoiceToGeminiCandidate_ThoughtSignature(t *testing.T) {
 				Index: 0,
 				Message: &llm.Message{
 					Role:               "assistant",
-					ReasoningSignature: shared.EncodeGeminiThoughtSignature(lo.ToPtr("signature_A"), ""),
+					ReasoningSignature: shared.EncodeGeminiThoughtSignature(lo.ToPtr("signature_A")),
 					ToolCalls: []llm.ToolCall{
 						{
 							ID:   "call_001",
@@ -1269,7 +1269,7 @@ func TestConvertLLMChoiceToGeminiCandidate_ThoughtSignature(t *testing.T) {
 				Index: 0,
 				Message: &llm.Message{
 					Role:               "assistant",
-					ReasoningSignature: lo.ToPtr(shared.OpenAIEncryptedContentPrefix + "encrypted_data"),
+					ReasoningSignature: lo.ToPtr("encrypted_data"),
 					ToolCalls: []llm.ToolCall{
 						{
 							ID:   "call_001",
@@ -1286,7 +1286,7 @@ func TestConvertLLMChoiceToGeminiCandidate_ThoughtSignature(t *testing.T) {
 				t.Helper()
 				require.NotNil(t, result)
 				require.Len(t, result.Content.Parts, 1)
-				require.Equal(t, shared.OpenAIEncryptedContentPrefix+"encrypted_data", result.Content.Parts[0].ThoughtSignature)
+				require.Equal(t, "encrypted_data", result.Content.Parts[0].ThoughtSignature)
 			},
 		},
 		{
@@ -1355,7 +1355,7 @@ func TestConvertLLMChoiceToGeminiCandidate_ThoughtSignature(t *testing.T) {
 				Index: 0,
 				Message: &llm.Message{
 					Role:               "assistant",
-					ReasoningSignature: shared.EncodeGeminiThoughtSignature(lo.ToPtr("signature_without_parts"), ""),
+					ReasoningSignature: shared.EncodeGeminiThoughtSignature(lo.ToPtr("signature_without_parts")),
 				},
 			},
 			validate: func(t *testing.T, result *Candidate) {
@@ -1765,7 +1765,7 @@ func TestConvertGeminiToLLMResponse_Testdata(t *testing.T) {
 			err := xtest.LoadTestData(t, tc.geminiFile, &geminiResp)
 			require.NoError(t, err)
 
-			result := convertGeminiToLLMResponse(&geminiResp, false, shared.TransportScope{})
+			result := convertGeminiToLLMResponse(&geminiResp, false)
 			tc.validateFunc(t, result)
 		})
 	}
@@ -1876,7 +1876,7 @@ func TestRoundTrip_GeminiResponse_ToLLM_BackToGemini(t *testing.T) {
 			require.NoError(t, err)
 
 			// Convert Gemini -> LLM (non-streaming)
-			llmResp := convertGeminiToLLMResponse(&originalGemini, false, shared.TransportScope{})
+			llmResp := convertGeminiToLLMResponse(&originalGemini, false)
 
 			// Convert LLM -> Gemini (non-streaming)
 			convertedGemini := convertLLMToGeminiResponse(llmResp, false)
@@ -2003,7 +2003,7 @@ func TestRoundTrip_LLMResponse_ToGemini_BackToLLM(t *testing.T) {
 			geminiResp := convertLLMToGeminiResponse(&originalLLM, false)
 
 			// Convert Gemini -> LLM (non-streaming)
-			convertedLLM := convertGeminiToLLMResponse(geminiResp, false, shared.TransportScope{})
+			convertedLLM := convertGeminiToLLMResponse(geminiResp, false)
 
 			// Verify key fields are preserved
 			require.Equal(t, originalLLM.ID, convertedLLM.ID)
@@ -2036,6 +2036,59 @@ func TestRoundTrip_LLMResponse_ToGemini_BackToLLM(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestConvertLLMToGeminiResponse_CitationMetadataFallback(t *testing.T) {
+	resp := convertLLMToGeminiResponse(&llm.Response{
+		ID:    "resp_gemini_fallback",
+		Model: "gemini-2.5-flash",
+		Choices: []llm.Choice{{
+			Message: &llm.Message{
+				Role:    "assistant",
+				Content: llm.MessageContent{Content: lo.ToPtr("Grounded answer")},
+				Annotations: []llm.Annotation{{
+					Type:        "url_citation",
+					StartIndex:  lo.ToPtr(int64(0)),
+					EndIndex:    lo.ToPtr(int64(8)),
+					URLCitation: &llm.URLCitation{URL: "https://example.com/fallback", Title: "Fallback Source"},
+				}},
+			},
+		}},
+	}, false)
+
+	require.Len(t, resp.Candidates, 1)
+	require.Nil(t, resp.Candidates[0].GroundingMetadata)
+	require.NotNil(t, resp.Candidates[0].CitationMetadata)
+	require.Len(t, resp.Candidates[0].CitationMetadata.Citations, 1)
+	require.Equal(t, "https://example.com/fallback", resp.Candidates[0].CitationMetadata.Citations[0].URI)
+	require.Equal(t, "Fallback Source", resp.Candidates[0].CitationMetadata.Citations[0].Title)
+	require.Equal(t, int64(0), resp.Candidates[0].CitationMetadata.Citations[0].StartIndex)
+	require.Equal(t, int64(8), resp.Candidates[0].CitationMetadata.Citations[0].EndIndex)
+}
+
+func TestConvertLLMToGeminiResponse_GroundingMetadataTakesPrecedenceOverAnnotations(t *testing.T) {
+	resp := convertLLMToGeminiResponse(&llm.Response{
+		ID:    "resp_gemini_priority",
+		Model: "gemini-2.5-flash",
+		Choices: []llm.Choice{{
+			Message: &llm.Message{
+				Role:    "assistant",
+				Content: llm.MessageContent{Content: lo.ToPtr("Grounded answer")},
+				Annotations: []llm.Annotation{{
+					Type:        "url_citation",
+					URLCitation: &llm.URLCitation{URL: "https://example.com/ignore", Title: "Ignore Me"},
+				}},
+			},
+			TransformerMetadata: map[string]any{
+				TransformerMetadataKeyGroundingMetadata: &GroundingMetadata{WebSearchQueries: []string{"authoritative query"}},
+			},
+		}},
+	}, false)
+
+	require.Len(t, resp.Candidates, 1)
+	require.NotNil(t, resp.Candidates[0].GroundingMetadata)
+	require.Equal(t, []string{"authoritative query"}, resp.Candidates[0].GroundingMetadata.WebSearchQueries)
+	require.Nil(t, resp.Candidates[0].CitationMetadata)
 }
 
 func TestConvertLLMToGeminiResponse_GroundingMetadata(t *testing.T) {

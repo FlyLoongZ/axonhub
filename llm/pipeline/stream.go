@@ -9,7 +9,6 @@ import (
 	"github.com/looplj/axonhub/llm"
 	"github.com/looplj/axonhub/llm/httpclient"
 	"github.com/looplj/axonhub/llm/streams"
-	"github.com/looplj/axonhub/llm/transformer/shared"
 )
 
 // hasFinishReason checks if an llm.Response event contains a finish reason.
@@ -90,10 +89,10 @@ func (p *pipeline) stream(
 		p.applyRawErrorResponseMiddlewares(ctx, err)
 
 		if httpErr, ok := errors.AsType[*httpclient.Error](err); ok {
-			return nil, p.Outbound.TransformError(ctx, httpErr)
+			return nil, WrapUpstreamError(p.Outbound.TransformError(ctx, httpErr))
 		}
 
-		return nil, err
+		return nil, WrapUpstreamError(err)
 	}
 
 	// Apply raw stream middlewares
@@ -116,10 +115,6 @@ func (p *pipeline) stream(
 		)
 	}
 
-	if request != nil && request.Metadata != nil {
-		ctx = shared.ContextWithTransportScope(ctx, shared.ScopeFromMetadata(request.Metadata))
-	}
-
 	llmStream, err := p.Outbound.TransformStream(ctx, request, outboundStream)
 	if err != nil {
 		outboundStream.Close()
@@ -127,7 +122,7 @@ func (p *pipeline) stream(
 
 		slog.ErrorContext(ctx, "Failed to transform streaming request", slog.Any("error", err))
 
-		return nil, err
+		return nil, WrapUpstreamError(err)
 	}
 
 	rawLlmStream := llmStream

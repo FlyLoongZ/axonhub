@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 
@@ -23,8 +24,6 @@ var _ transformer.Outbound = (*OutboundTransformer)(nil)
 type Config struct {
 	// BaseURL is the base URL for the OpenAI API, required.
 	BaseURL string `json:"base_url,omitempty"`
-
-	AccountIdentity string `json:"account_identity,omitempty"`
 
 	// RawURL is whether to use raw URL for requests, default is false.
 	// If true, the request URL will be used as is, without appending the response endpoint.
@@ -125,15 +124,10 @@ func (t *OutboundTransformer) TransformRequest(ctx context.Context, llmReq *llm.
 		return nil, fmt.Errorf("chat request is nil")
 	}
 
-	scope := shared.TransportScope{
-		BaseURL:         t.config.BaseURL,
-		AccountIdentity: t.config.AccountIdentity,
-	}
-
 	//nolint:exhaustive // Checked.
 	switch llmReq.RequestType {
 	case llm.RequestTypeCompact:
-		return t.transformCompactRequest(ctx, llmReq, scope)
+		return t.transformCompactRequest(ctx, llmReq)
 	case llm.RequestTypeChat, "":
 		// continue
 	default:
@@ -156,6 +150,9 @@ func (t *OutboundTransformer) TransformRequest(ctx context.Context, llmReq *llm.
 			tools = append(tools, tool)
 			// Store image output format in TransformerMetadata
 			llmReq.TransformerMetadata["image_output_format"] = tool.OutputFormat
+		case llm.ToolTypeWebSearch, llm.ToolTypeGoogleSearch:
+			tool := convertWebSearchToTool(item)
+			tools = append(tools, tool)
 		case llm.ToolTypeResponsesCustomTool:
 			tool := convertCustomToTool(item)
 			tools = append(tools, tool)
@@ -170,7 +167,7 @@ func (t *OutboundTransformer) TransformRequest(ctx context.Context, llmReq *llm.
 
 	payload := Request{
 		Model:                llmReq.Model,
-		Input:                convertInputFromMessages(llmReq.Messages, llmReq.TransformOptions, scope),
+		Input:                convertInputFromMessages(llmReq.Messages, llmReq.TransformOptions),
 		Instructions:         convertInstructionsFromMessages(llmReq.Messages),
 		Tools:                tools,
 		ParallelToolCalls:    llmReq.ParallelToolCalls,
@@ -237,7 +234,7 @@ func (t *OutboundTransformer) TransformRequest(ctx context.Context, llmReq *llm.
 		APIFormat:             string(llm.APIFormatOpenAIResponse),
 		TransformerMetadata:   llmReq.TransformerMetadata,
 		SkipInboundQueryMerge: true,
-		Metadata:              scope.Metadata(),
+		Metadata:              nil,
 	}, nil
 }
 
@@ -281,8 +278,6 @@ func (t *OutboundTransformer) transformStandardResponse(
 		return nil, fmt.Errorf("http response is nil")
 	}
 
-	scope, _ := shared.GetTransportScope(ctx)
-
 	if httpResp.StatusCode >= 400 {
 		return nil, fmt.Errorf("HTTP error %d", httpResp.StatusCode)
 	}
@@ -302,12 +297,13 @@ func (t *OutboundTransformer) transformStandardResponse(
 	}
 
 	llmResp := &llm.Response{
-		Object:             "chat.completion",
-		ID:                 resp.ID,
-		Model:              resp.Model,
-		Created:            resp.CreatedAt,
-		PreviousResponseID: resp.PreviousResponseID,
-		Choices:            make([]llm.Choice, 0),
+		Object:              "chat.completion",
+		ID:                  resp.ID,
+		Model:               resp.Model,
+		Created:             resp.CreatedAt,
+		PreviousResponseID:  resp.PreviousResponseID,
+		Choices:             make([]llm.Choice, 0),
+		TransformerMetadata: map[string]any{},
 	}
 
 	// Convert usage if present
@@ -315,12 +311,11 @@ func (t *OutboundTransformer) transformStandardResponse(
 		llmResp.Usage = resp.Usage.ToUsage()
 	}
 
-	var transformerMetadata map[string]any
-	if httpResp.Request != nil {
-		transformerMetadata = httpResp.Request.TransformerMetadata
+	if httpResp.Request != nil && httpResp.Request.TransformerMetadata != nil {
+		llmResp.TransformerMetadata = maps.Clone(httpResp.Request.TransformerMetadata)
 	}
 
-	msg := convertOutputToMessage(resp.Output, scope, transformerMetadata)
+	msg := convertOutputToMessage(resp.Output, llmResp.TransformerMetadata)
 
 	choice := llm.Choice{
 		Index:   0,

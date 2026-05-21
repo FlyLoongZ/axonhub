@@ -477,7 +477,7 @@ func TestInboundTransformer_TransformStreamChunk(t *testing.T) {
 
 func TestInboundTransformer_TransformStream_SkipsPureReasoningSignatureChunk(t *testing.T) {
 	transformer := NewInboundTransformer()
-	signature := shared.GeminiThoughtSignaturePrefix + "stream_signature"
+	signature := "stream_signature"
 
 	stream, err := transformer.TransformStream(t.Context(), streams.SliceStream([]*llm.Response{
 		{
@@ -712,14 +712,18 @@ func TestMessageFromLLM_WithAnnotations(t *testing.T) {
 				Content: llm.MessageContent{Content: lo.ToPtr("The meaning of life...")},
 				Annotations: []llm.Annotation{
 					{
-						Type: "url_citation",
+						Type:       "url_citation",
+						StartIndex: lo.ToPtr(int64(0)),
+						EndIndex:   lo.ToPtr(int64(11)),
 						URLCitation: &llm.URLCitation{
 							URL:   "https://en.wikipedia.org/wiki/Meaning_of_life",
 							Title: "Meaning of life - Wikipedia",
 						},
 					},
 					{
-						Type: "url_citation",
+						Type:       "url_citation",
+						StartIndex: lo.ToPtr(int64(20)),
+						EndIndex:   lo.ToPtr(int64(27)),
 						URLCitation: &llm.URLCitation{
 							URL:   "https://plato.stanford.edu/entries/life-meaning/",
 							Title: "The Meaning of Life - Stanford Encyclopedia",
@@ -731,9 +735,22 @@ func TestMessageFromLLM_WithAnnotations(t *testing.T) {
 				require.Equal(t, "assistant", msg.Role)
 				require.Len(t, msg.Annotations, 2)
 				require.Equal(t, "url_citation", msg.Annotations[0].Type)
+				require.NotNil(t, msg.Annotations[0].StartIndex)
+				require.Equal(t, int64(0), *msg.Annotations[0].StartIndex)
+				require.NotNil(t, msg.Annotations[0].EndIndex)
+				require.Equal(t, int64(11), *msg.Annotations[0].EndIndex)
 				require.NotNil(t, msg.Annotations[0].URLCitation)
 				require.Equal(t, "https://en.wikipedia.org/wiki/Meaning_of_life", msg.Annotations[0].URLCitation.URL)
 				require.Equal(t, "Meaning of life - Wikipedia", msg.Annotations[0].URLCitation.Title)
+				require.NotNil(t, msg.Annotations[1].StartIndex)
+				require.Equal(t, int64(20), *msg.Annotations[1].StartIndex)
+				require.NotNil(t, msg.Annotations[1].EndIndex)
+				require.Equal(t, int64(27), *msg.Annotations[1].EndIndex)
+
+				payload, err := json.Marshal(msg)
+				require.NoError(t, err)
+				require.Contains(t, string(payload), `"start_index":0`)
+				require.Contains(t, string(payload), `"end_index":11`)
 			},
 		},
 		{
@@ -907,7 +924,7 @@ func TestMessage_ToLLMMessage_WithAlreadyPrefixedGeminiThoughtSignature(t *testi
 				Index: 0,
 				ExtraContent: &ToolCallExtraContent{
 					Google: &ToolCallGoogleExtraContent{
-						ThoughtSignature: shared.GeminiThoughtSignaturePrefix + "base64_signature",
+						ThoughtSignature: "base64_signature",
 					},
 				},
 			},
@@ -917,7 +934,7 @@ func TestMessage_ToLLMMessage_WithAlreadyPrefixedGeminiThoughtSignature(t *testi
 	got := msg.ToLLMMessage()
 
 	require.NotNil(t, got.ReasoningSignature)
-	require.Equal(t, shared.GeminiThoughtSignaturePrefix+"base64_signature", *got.ReasoningSignature)
+	require.Equal(t, "base64_signature", *got.ReasoningSignature)
 }
 
 func TestToolCall_ToLLMToolCall_NormalizesGeminiThoughtSignature(t *testing.T) {
@@ -1030,7 +1047,7 @@ func TestInboundTransformer_TransformRequest_WithToolCallExtraFieldsThoughtSigna
 func TestMessageFromLLM_WithGeminiThoughtSignatureDoesNotInjectToolCallExtraContent(t *testing.T) {
 	msg := llm.Message{
 		Role:               "assistant",
-		ReasoningSignature: shared.EncodeGeminiThoughtSignature(lo.ToPtr("base64_signature"), ""),
+		ReasoningSignature: shared.EncodeGeminiThoughtSignature(lo.ToPtr("base64_signature")),
 		ToolCalls: []llm.ToolCall{
 			{
 				ID:   "call_1",
@@ -1063,7 +1080,7 @@ func TestInboundTransformer_TransformResponse_WithGeminiToolCallThoughtSignature
 				Index: 0,
 				Message: &llm.Message{
 					Role:               "assistant",
-					ReasoningSignature: shared.EncodeGeminiThoughtSignature(lo.ToPtr("base64_signature"), ""),
+					ReasoningSignature: shared.EncodeGeminiThoughtSignature(lo.ToPtr("base64_signature")),
 					ToolCalls: []llm.ToolCall{
 						{
 							ID:   "call_1",
@@ -1113,7 +1130,7 @@ func TestInboundTransformer_TransformResponse_WithGeminiPrefixedToolCallMetadata
 							},
 							Index: 0,
 							TransformerMetadata: map[string]any{
-								TransformerMetadataKeyGoogleThoughtSignature: shared.GeminiThoughtSignaturePrefix + "base64_signature",
+								TransformerMetadataKeyGoogleThoughtSignature: "base64_signature",
 							},
 						},
 					},
@@ -1133,7 +1150,7 @@ func TestInboundTransformer_TransformResponse_WithGeminiPrefixedToolCallMetadata
 	require.NotNil(t, oaiResp.Choices[0].Message.ToolCalls[0].ExtraContent.Google)
 	require.Equal(
 		t,
-		shared.GeminiThoughtSignaturePrefix+"base64_signature",
+		"base64_signature",
 		oaiResp.Choices[0].Message.ToolCalls[0].ExtraContent.Google.ThoughtSignature,
 	)
 }

@@ -25,12 +25,18 @@ var defaultRetryPolicy = RetryPolicy{
 	RetryDelayMs:            1000,
 	LoadBalancerStrategy:    "adaptive",
 	Enabled:                 true,
+	UpstreamErrorPolicy: UpstreamErrorPolicy{
+		Mode: UpstreamErrorModePassthrough,
+	},
 }
 
 var defaultModelSettings = SystemModelSettings{
 	FallbackToChannelsOnModelNotFound: true,
 	QueryAllChannelModels:             true,
 	DefaultModelAPIIncludeAll:         false,
+	AutoReasoningEffort:               false,
+	ModelBlacklistRegex:               "",
+	DeveloperSettings:                 []*DeveloperModelSettings{},
 }
 
 var defaultChannelSetting = SystemChannelSettings{
@@ -55,6 +61,7 @@ var defaultAutoBackupSettings = AutoBackupSettings{
 	IncludeModels:      true,
 	IncludeAPIKeys:     false,
 	IncludeModelPrices: true,
+	IncludeUsageStats:  false,
 	RetentionDays:      30,
 }
 

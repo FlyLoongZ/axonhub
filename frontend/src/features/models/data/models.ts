@@ -53,6 +53,7 @@ const MODELS_QUERY = `
             lastUpdated
           }
           settings {
+            disableDeveloperSettingsInheritance
             associations {
               type
               priority
@@ -171,6 +172,7 @@ const CREATE_MODEL_MUTATION = `
         lastUpdated
       }
       settings {
+        disableDeveloperSettingsInheritance
         associations {
           type
           priority
@@ -271,6 +273,7 @@ const BULK_CREATE_MODELS_MUTATION = `
         lastUpdated
       }
       settings {
+        disableDeveloperSettingsInheritance
         associations {
           type
           priority
@@ -371,6 +374,7 @@ const UPDATE_MODEL_MUTATION = `
         lastUpdated
       }
       settings {
+        disableDeveloperSettingsInheritance
         associations {
           type
           priority
@@ -471,13 +475,14 @@ interface QueryModelsArgs {
   before?: string;
   where?: Record<string, any>;
   orderBy?: {
-    field: 'CREATED_AT' | 'UPDATED_AT' | 'NAME' | 'MODEL_ID';
+    field: 'CREATED_AT' | 'UPDATED_AT' | 'NAME';
     direction: 'ASC' | 'DESC';
   };
 }
 
-export function useQueryModels(args: QueryModelsArgs) {
+export function useQueryModels(args: QueryModelsArgs, options?: { enabled?: boolean }) {
   return useQuery({
+    enabled: options?.enabled ?? true,
     queryKey: ['models', args],
     queryFn: async () => {
       const data = await graphqlRequest<{ models: ModelConnection }>(MODELS_QUERY, args);
@@ -682,11 +687,11 @@ export interface ModelAssociationInput {
   };
   regex?: {
     pattern: string;
-    exclude?: ExcludeAssociationInput[];
+    exclude?: ExcludeAssociationInput[] | null;
   };
   modelId?: {
     modelId: string;
-    exclude?: ExcludeAssociationInput[];
+    exclude?: ExcludeAssociationInput[] | null;
   };
   channelTagsModel?: {
     channelTags: string[];
@@ -699,9 +704,9 @@ export interface ModelAssociationInput {
 }
 
 export interface ExcludeAssociationInput {
-  channelNamePattern?: string;
-  channelIds?: number[];
-  channelTags?: string[];
+  channelNamePattern?: string | null;
+  channelIds?: number[] | null;
+  channelTags?: string[] | null;
 }
 
 export interface FilterConditionInput {
@@ -710,7 +715,7 @@ export interface FilterConditionInput {
   conditions?: FilterConditionInput[];
   field?: string;
   operator?: string;
-  value?: unknown;
+  value?: string | number | boolean;
 }
 
 export interface ChannelModelEntry {

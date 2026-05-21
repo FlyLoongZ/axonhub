@@ -40,6 +40,7 @@ export const configurableChannelEndpointApiFormatSchema = z.enum(configurableCha
 export const channelEndpointSchema = z.object({
   apiFormat: z.string().min(1),
   path: z.string().optional(),
+  baseURL: z.url('Invalid URL').optional().or(z.literal('')),
 });
 export type ChannelEndpoint = z.infer<typeof channelEndpointSchema>;
 
@@ -57,6 +58,7 @@ export const channelTypeSchema = z.enum([
   'deepseek',
   'deepseek_anthropic',
   'deepinfra',
+  'qiniu',
   'doubao',
   'doubao_anthropic',
   'moonshot',
@@ -96,6 +98,7 @@ export const channelTypeSchema = z.enum([
   'nanogpt',
   'nanogpt_responses',
   'fireworks',
+  'opencode_go',
   'ollama',
 ]);
 export type ChannelType = z.infer<typeof channelTypeSchema>;
@@ -288,6 +291,16 @@ export const channelSchema = z.object({
 });
 export type Channel = z.infer<typeof channelSchema>;
 
+// Simplified schema for saveChannelEndpoints mutation response
+export const channelEndpointsResponseSchema = z.object({
+  id: z.string(),
+  type: channelTypeSchema,
+  name: z.string(),
+  defaultEndpoints: z.array(channelEndpointSchema).optional().default([]).nullable(),
+  endpoints: z.array(channelEndpointSchema).optional().default([]).nullable(),
+});
+export type ChannelEndpointsResponse = z.infer<typeof channelEndpointsResponseSchema>;
+
 export const testAPIKeyResultSchema = z.object({
   keyPrefix: z.string(),
   success: z.boolean(),
@@ -307,7 +320,7 @@ export const testChannelAPIKeysPayloadSchema = z.object({
 export type TestChannelAPIKeysPayload = z.infer<typeof testChannelAPIKeysPayloadSchema>;
 
 // Pricing Schemas
-export const pricingModeSchema = z.enum(['flat_fee', 'usage_per_unit', 'usage_tiered']);
+export const pricingModeSchema = z.enum(['flat_fee', 'usage_per_unit', 'usage_tiered', 'usage_volume']);
 export type PricingMode = z.infer<typeof pricingModeSchema>;
 
 export const priceItemCodeSchema = z.enum(['prompt_tokens', 'completion_tokens', 'prompt_cached_tokens', 'prompt_write_cached_tokens']);

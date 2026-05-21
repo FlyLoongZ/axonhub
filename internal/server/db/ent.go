@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"entgo.io/ent/dialect"
@@ -98,7 +99,9 @@ func NewEntClient(cfg Config, lc fx.Lifecycle) *ent.Client {
 
 	ctx := context.Background()
 
-	dbDialect, masterDB, masterPool, err := openPooledDB(ctx, cfg.Dialect, cfg.DSN,
+	// ensureSQLiteWAL is a no-op for non-SQLite dialects.
+	masterDSN := ensureSQLiteWAL(cfg.Dialect, cfg.DSN, cfg.DisableSQLiteAutoWAL)
+	dbDialect, masterDB, masterPool, err := openPooledDB(ctx, cfg.Dialect, masterDSN,
 		cfg.MaxOpenConns, cfg.MaxIdleConns, cfg.ConnMaxLifetime, cfg.ConnMaxIdleTime,
 		cfg.HealthCheckPeriod)
 	if err != nil {
@@ -113,7 +116,8 @@ func NewEntClient(cfg Config, lc fx.Lifecycle) *ent.Client {
 
 	var drv dialect.Driver
 	if cfg.ReadReplica.DSN != "" {
-		readDialect, replicaDB, replicaPool, err := openPooledDB(ctx, cfg.Dialect, cfg.ReadReplica.DSN,
+		replicaDSN := ensureSQLiteWAL(cfg.Dialect, cfg.ReadReplica.DSN, cfg.DisableSQLiteAutoWAL)
+		readDialect, replicaDB, replicaPool, err := openPooledDB(ctx, cfg.Dialect, replicaDSN,
 			cfg.ReadReplica.MaxOpenConns, cfg.ReadReplica.MaxIdleConns,
 			cfg.ConnMaxLifetime, cfg.ConnMaxIdleTime,
 			cfg.HealthCheckPeriod)
@@ -169,6 +173,25 @@ func NewEntClient(cfg Config, lc fx.Lifecycle) *ent.Client {
 	}
 
 	return client
+}
+
+// ensureSQLiteWAL appends _pragma=journal_mode(WAL) to the DSN for SQLite dialects
+// unless WAL is explicitly disabled or the DSN already specifies a journal_mode pragma.
+func ensureSQLiteWAL(dialectName, dsn string, disable bool) string {
+	if disable {
+		return dsn
+	}
+	switch dialectName {
+	case "sqlite3", "sqlite":
+		if !strings.Contains(dsn, "journal_mode") {
+			if strings.Contains(dsn, "?") {
+				dsn += "&_pragma=journal_mode(WAL)"
+			} else {
+				dsn += "?_pragma=journal_mode(WAL)"
+			}
+		}
+	}
+	return dsn
 }
 
 // openDB opens a sql.DB for the given dialect and DSN, applies pool settings,

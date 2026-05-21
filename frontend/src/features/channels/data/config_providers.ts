@@ -25,9 +25,11 @@ import {
   AiHubMix,
   Cerebras,
   Claude,
+  Qiniu,
   XiaomiMiMo,
   Fireworks,
-  Ollama
+  Ollama,
+  OpenCode,
 } from '@lobehub/icons';
 import { NanoGPTIcon } from '../components/nanogpt-icon';
 import { CHANNEL_CONFIGS } from './config_channels';
@@ -42,7 +44,7 @@ export interface ProviderConfig {
 }
 
 /**
- * Provider configurations - groups channel types by provider/vendor
+ * Provider configurations - groups channel types by provider
  * Each provider can support multiple API formats (channel types)
  */
 export const PROVIDER_CONFIGS: Record<string, ProviderConfig> = {
@@ -214,6 +216,12 @@ export const PROVIDER_CONFIGS: Record<string, ProviderConfig> = {
     color: 'bg-indigo-100 text-indigo-800 border-indigo-200',
     channelTypes: ['deepinfra'],
   },
+  qiniu: {
+    provider: 'qiniu',
+    icon: Qiniu,
+    color: 'bg-blue-100 text-blue-800 border-blue-200',
+    channelTypes: ['qiniu'],
+  },
   cerebras: {
     provider: 'cerebras',
     icon: Cerebras,
@@ -231,6 +239,12 @@ export const PROVIDER_CONFIGS: Record<string, ProviderConfig> = {
     icon: Fireworks,
     color: 'bg-orange-100 text-orange-800 border-orange-200',
     channelTypes: ['fireworks'],
+  },
+  opencode_go: {
+    provider: 'opencode_go',
+    icon: OpenCode,
+    color: 'bg-indigo-100 text-indigo-800 border-indigo-200',
+    channelTypes: ['opencode_go'],
   },
   ollama: {
     provider: 'ollama',
