@@ -11,6 +11,10 @@ type Config struct {
 	ConnMaxLifetime time.Duration `conf:"conn_max_lifetime" yaml:"conn_max_lifetime" json:"conn_max_lifetime"`
 	ConnMaxIdleTime time.Duration `conf:"conn_max_idle_time" yaml:"conn_max_idle_time" json:"conn_max_idle_time"`
 
+	// HealthCheckPeriod is the interval between health checks on idle connections.
+	// Only used when dialect is postgres (pgxpool). If zero, pgxpool's default (1m) is used.
+	HealthCheckPeriod time.Duration `conf:"health_check_period" yaml:"health_check_period" json:"health_check_period"`
+
 	ReadReplica ReadReplicaConfig `conf:"read_replica" yaml:"read_replica" json:"read_replica"`
 }
 
