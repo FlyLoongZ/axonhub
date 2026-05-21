@@ -25,8 +25,10 @@ build-backend:
 
 # Build the frontend application
 build-frontend:
+	@echo "Installing axonhub frontend dependence..."
+	cd frontend && pnpm install
 	@echo "Building axonhub frontend..."
-	cd frontend && pnpm vite build
+	cd frontend && NODE_OPTIONS=--max-old-space-size=8192 pnpm vite build
 	@echo "Copying frontend dist to server static directory..."
 	rm -rf internal/server/static/dist/assets
 	mkdir -p internal/server/static/dist
