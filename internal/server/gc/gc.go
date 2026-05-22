@@ -399,7 +399,12 @@ func (w *Worker) cleanupOldRequestExecutions(ctx context.Context, cutoffTime tim
 			}
 
 			var qErr error
-			executions, qErr = query.All(batchCtx)
+			executions, qErr = query.Select(
+				requestexecution.FieldID,
+				requestexecution.FieldProjectID,
+				requestexecution.FieldDataStorageID,
+				requestexecution.FieldRequestID,
+			).All(batchCtx)
 			return qErr
 		})
 		if err != nil {
@@ -489,7 +494,11 @@ func (w *Worker) cleanupOldRequestsRecords(ctx context.Context, cutoffTime time.
 			}
 
 			var qErr error
-			reqs, qErr = query.All(batchCtx)
+			reqs, qErr = query.Select(
+				request.FieldID,
+				request.FieldProjectID,
+				request.FieldDataStorageID,
+			).All(batchCtx)
 			return qErr
 		})
 		if err != nil {
